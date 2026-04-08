@@ -1,4 +1,4 @@
-<![CDATA[<div align="center">
+<div align="center">
 
 # 🔮 FinSight — Autonomous Indian Stock Intelligence System
 
@@ -497,4 +497,3 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 *FinSight is for educational purposes only. Not SEBI-registered investment advice.*
 
 </div>
-]]>
