@@ -100,6 +100,35 @@ async def run(symbol: str, ohlcv: OHLCVData) -> RiskMetrics:
     else:
         risk_level = "MEDIUM"
 
+    if beta < 0.8:
+        beta_classification = "defensive beta"
+    elif beta <= 1.2:
+        beta_classification = "market-like beta"
+    else:
+        beta_classification = "high beta"
+
+    if var_95 < -0.03:
+        var_classification = "elevated downside tail risk"
+    elif var_95 < -0.02:
+        var_classification = "moderate downside tail risk"
+    else:
+        var_classification = "contained downside tail risk"
+
+    if sharpe >= 1.0:
+        sharpe_classification = "strong risk-adjusted returns"
+    elif sharpe >= 0.3:
+        sharpe_classification = "moderate risk-adjusted returns"
+    elif sharpe >= 0:
+        sharpe_classification = "weak risk-adjusted returns"
+    else:
+        sharpe_classification = "negative risk-adjusted returns"
+
+    key_triggers = [
+        f"Beta={beta:.2f} ({beta_classification})",
+        f"VaR95={var_95:.2%} ({var_classification})",
+        f"Sharpe={sharpe:.2f} ({sharpe_classification})",
+    ]
+
     # ── Reasoning ───────────────────────────────────────────────────
     reasoning = (
         f"{symbol} has a beta of {beta:.2f} vs Nifty 50 with "
@@ -123,4 +152,5 @@ async def run(symbol: str, ohlcv: OHLCVData) -> RiskMetrics:
         volatility_annualized=round(volatility, 4),
         risk_level=risk_level,
         reasoning=reasoning,
+        key_triggers=key_triggers,
     )

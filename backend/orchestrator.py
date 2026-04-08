@@ -11,9 +11,11 @@ import logging
 import traceback
 
 from backend.agents import (
+    critic,
     data_ingestion,
     eda_agent,
     fundamental,
+    macro_agent,
     ml_agent,
     risk,
     sentiment,
@@ -21,7 +23,7 @@ from backend.agents import (
     technical,
 )
 from backend.database import save_agent_output, save_synthesis_result, update_run_status
-from backend.models.schemas import MLPrediction, OHLCVData
+from backend.models.schemas import MLPrediction, MacroResult, ModelMetrics, OHLCVData, RiskMetrics, SentimentData
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,23 @@ def _save_success(run_id: str, symbol: str, agent_name: str, result) -> None:
         reasoning = (
             f"Generated multi-stock EDA for {len(getattr(result, 'symbols', []))} symbols."
         )
+    elif agent_name == "critic":
+        signal = None
+        confidence = getattr(result, "confidence_penalty", None)
+        challenges = getattr(result, "challenges", []) or []
+        reasoning = (
+            "No critic review required for this synthesis."
+            if not challenges
+            else "Critic challenges: " + " | ".join(challenges[:3])
+        )
+    elif agent_name == "macro":
+        macro_signal = getattr(result, "macro_signal", None)
+        signal = {
+            "BULLISH": "BUY",
+            "BEARISH": "SELL",
+            "NEUTRAL": "HOLD",
+        }.get(macro_signal)
+        confidence = None
 
     data_dict = result.model_dump() if hasattr(result, "model_dump") else None
 
@@ -86,8 +105,10 @@ def _mark_symbol_downstream_failed(run_id: str, symbol: str, reason: str) -> Non
         "fundamental",
         "sentiment",
         "risk",
+        "macro",
         "ml_prediction",
         "synthesis",
+        "critic",
     ):
         _save_failure(run_id, symbol, agent_name, reason)
 
@@ -174,16 +195,52 @@ async def _run_eda_and_ml_stage(
     return ml_predictions
 
 
+async def _run_macro_stage(
+    run_id: str,
+    symbols: list[str],
+) -> dict[str, MacroResult | None]:
+    """
+    Stage 2b: fetch run-level macro flow (NSE FII/DII) once,
+    then persist the same macro output per symbol for UI consistency.
+    """
+    macro_by_symbol: dict[str, MacroResult | None] = {symbol: None for symbol in symbols}
+
+    try:
+        macro_result = await macro_agent.run()
+        for symbol in symbols:
+            macro_by_symbol[symbol] = macro_result
+            _save_success(run_id, symbol, "macro", macro_result)
+
+        logger.info(
+            "✓ macro stage: signal=%s fii_net_5d=%.2f dii_net_5d=%.2f multiplier=%.2f",
+            macro_result.macro_signal,
+            macro_result.fii_net_5d,
+            macro_result.dii_net_5d,
+            macro_result.confidence_multiplier,
+        )
+    except Exception as exc:
+        error_msg = f"{type(exc).__name__}: {exc}"
+        logger.error("✗ macro stage FAILED: %s", error_msg)
+        for symbol in symbols:
+            _save_failure(run_id, symbol, "macro", error_msg)
+
+    return macro_by_symbol
+
+
 async def _run_symbol_analysis_stage(
     run_id: str,
     symbol: str,
     ohlcv: OHLCVData,
     ml_prediction: MLPrediction | None,
+    macro_result: MacroResult | None,
 ) -> None:
     """
     Stage 3 (per symbol):
     technical + fundamental + sentiment + risk in parallel,
-    followed by synthesis with ML prediction context.
+    followed by synthesis with ML + macro context.
+
+    Stage 3.5 (per symbol):
+    critic review for strongly bullish synthesis before final DB persistence.
     """
     tech_result = None
     fund_result = None
@@ -241,44 +298,138 @@ async def _run_symbol_analysis_stage(
         _run_risk(),
     )
 
-    if all(r is not None for r in [tech_result, fund_result, sent_result, risk_result, ml_prediction]):
-        try:
-            synth_result = await synthesis.run(
-                symbol,
-                tech_result,
-                fund_result,
-                sent_result,
-                risk_result,
-                ml_prediction,
-            )
-            _save_success(run_id, symbol, "synthesis", synth_result)
-            save_synthesis_result(run_id, synth_result)
-            logger.info(
-                "✓ %s synthesis: %s (%.0f%%) target=%+.1f%%",
-                symbol,
-                synth_result.final_verdict,
-                synth_result.overall_confidence * 100,
-                synth_result.price_target_pct,
-            )
-        except Exception as exc:
-            error_msg = f"{type(exc).__name__}: {exc}"
-            logger.error("✗ %s synthesis FAILED: %s", symbol, error_msg)
-            _save_failure(run_id, symbol, "synthesis", error_msg)
-    else:
+    # Require at least technical and fundamental for synthesis
+    if tech_result is None or fund_result is None:
         missing: list[str] = []
         if tech_result is None:
             missing.append("technical")
         if fund_result is None:
             missing.append("fundamental")
-        if sent_result is None:
-            missing.append("sentiment")
-        if risk_result is None:
-            missing.append("risk")
-        if ml_prediction is None:
-            missing.append("ml_prediction")
-
-        error_msg = f"Cannot synthesise - missing agent outputs: {', '.join(missing)}"
+        error_msg = f"Cannot synthesise - missing critical agent outputs: {', '.join(missing)}"
         logger.warning("⚠ %s synthesis SKIPPED: %s", symbol, error_msg)
+        _save_failure(run_id, symbol, "synthesis", error_msg)
+        return
+
+    # Create fallback stubs for any missing non-critical agents
+    _sent_result = sent_result or SentimentData(
+        symbol=symbol,
+        headlines=[],
+        sentiment_score=0.0,
+        sentiment_label="neutral",
+        key_themes=["data unavailable"],
+        signal="HOLD",
+        confidence=0.3,
+        reasoning="Sentiment analysis unavailable — using neutral fallback.",
+    )
+    _risk_result = risk_result or RiskMetrics(
+        symbol=symbol,
+        beta=1.0,
+        var_95=-0.02,
+        sharpe_ratio=0.0,
+        max_drawdown=-0.15,
+        volatility_annualized=0.25,
+        risk_level="MEDIUM",
+        reasoning="Risk agent unavailable — using moderate default.",
+        key_triggers=["Risk data unavailable"],
+    )
+    _ml_prediction = ml_prediction or MLPrediction(
+        symbol=symbol,
+        prediction_horizon="5-day direction",
+        regime="sideways",
+        predicted_direction="SIDEWAYS",
+        prediction_confidence=0.4,
+        feature_importances=[],
+        model_metrics=ModelMetrics(
+            accuracy=0.0,
+            precision=0.0,
+            recall=0.0,
+            f1_score=0.0,
+            confusion_matrix=[[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+            class_labels=["DOWN", "SIDEWAYS", "UP"],
+            training_samples=0,
+            test_samples=0,
+        ),
+        model_name="Unavailable",
+        feature_count=0,
+        signal="HOLD",
+        reasoning="ML prediction unavailable — using neutral fallback.",
+    )
+    _macro_result = macro_result or MacroResult(
+        fii_net_5d=0.0,
+        dii_net_5d=0.0,
+        macro_signal="NEUTRAL",
+        confidence_multiplier=1.0,
+        reasoning="Macro data unavailable — using neutral fallback.",
+    )
+
+    try:
+        synth_result = await synthesis.run(
+            symbol,
+            tech_result,
+            fund_result,
+            _sent_result,
+            _risk_result,
+            _ml_prediction,
+            _macro_result,
+        )
+
+        # Stage 3.5: Critic review runs only when synthesis is strongly bullish.
+        critic_result = None
+        try:
+            critic_result = await critic.run(
+                symbol=symbol,
+                synthesis_result=synth_result,
+                agent_outputs={
+                    "technical": tech_result,
+                    "fundamental": fund_result,
+                    "sentiment": _sent_result,
+                    "risk": _risk_result,
+                    "ml_prediction": _ml_prediction,
+                    "macro": _macro_result,
+                    "synthesis": synth_result,
+                },
+            )
+            _save_success(run_id, symbol, "critic", critic_result)
+        except Exception as exc:
+            error_msg = f"{type(exc).__name__}: {exc}"
+            logger.error("✗ %s critic FAILED: %s", symbol, error_msg)
+            _save_failure(run_id, symbol, "critic", error_msg)
+
+        if critic_result is not None and critic_result.confidence_penalty > 0.0:
+            synth_result.overall_confidence = round(
+                max(0.0, synth_result.overall_confidence - critic_result.confidence_penalty),
+                2,
+            )
+
+            if critic_result.challenges:
+                challenge_note = " | ".join(critic_result.challenges[:2])
+                if synth_result.conflict_notes:
+                    synth_result.conflict_notes = (
+                        f"{synth_result.conflict_notes}; Critic: {challenge_note}"
+                    )
+                else:
+                    synth_result.conflict_notes = f"Critic: {challenge_note}"
+
+            synth_result.summary = (
+                f"{synth_result.final_verdict} {symbol} with "
+                f"{synth_result.overall_confidence:.0%} confidence. "
+                f"Technical: {tech_result.signal}, Fundamental: {fund_result.signal}, "
+                f"Sentiment: {_sent_result.signal}, ML: {_ml_prediction.signal}, "
+                f"Risk: {_risk_result.risk_level}, Macro: {_macro_result.macro_signal}."
+            )
+
+        _save_success(run_id, symbol, "synthesis", synth_result)
+        save_synthesis_result(run_id, synth_result)
+        logger.info(
+            "✓ %s synthesis: %s (%.0f%%) target=%+.1f%%",
+            symbol,
+            synth_result.final_verdict,
+            synth_result.overall_confidence * 100,
+            synth_result.price_target_pct,
+        )
+    except Exception as exc:
+        error_msg = f"{type(exc).__name__}: {exc}"
+        logger.error("✗ %s synthesis FAILED: %s", symbol, error_msg)
         _save_failure(run_id, symbol, "synthesis", error_msg)
 
 
@@ -291,9 +442,10 @@ async def _run_analysis_async(run_id: str, symbols: list[str]) -> None:
 
     Pipeline:
     1) data_ingestion for all symbols
-    2) eda + ml_prediction in parallel
+    2) eda + ml_prediction + macro in parallel
     3) technical + fundamental + sentiment + risk per symbol
-    4) synthesis per symbol (includes ml_prediction)
+    4) synthesis per symbol (includes ml_prediction + macro)
+    5) critic per symbol for strongly bullish synthesis outputs
     """
     logger.info("▶ Analysis run %s started for symbols: %s", run_id, symbols)
 
@@ -311,7 +463,10 @@ async def _run_analysis_async(run_id: str, symbols: list[str]) -> None:
         logger.info("■ Analysis run %s finished: failed", run_id)
         return
 
-    ml_predictions = await _run_eda_and_ml_stage(run_id, symbols_with_data, ohlcv_dict)
+    ml_predictions, macro_results = await asyncio.gather(
+        _run_eda_and_ml_stage(run_id, symbols_with_data, ohlcv_dict),
+        _run_macro_stage(run_id, symbols_with_data),
+    )
 
     for symbol in symbols_with_data:
         try:
@@ -320,6 +475,7 @@ async def _run_analysis_async(run_id: str, symbols: list[str]) -> None:
                 symbol,
                 ohlcv_dict[symbol],
                 ml_predictions.get(symbol),
+                macro_results.get(symbol),
             )
         except Exception as exc:
             logger.error(

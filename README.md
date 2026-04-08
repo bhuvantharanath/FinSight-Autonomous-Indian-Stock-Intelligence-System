@@ -19,9 +19,9 @@
 
 ## 📖 Overview
 
-FinSight is an **autonomous multi-agent stock intelligence system** purpose-built for the **Indian equity market** (NSE/BSE). It orchestrates **7 specialized AI agents** that run concurrently — fetching live market data, computing technical indicators, analyzing fundamentals, gauging news sentiment via LLMs, assessing risk, predicting price direction with ML, and performing deep exploratory data analysis — then synthesizes everything into a single **BUY / HOLD / SELL** verdict with a detailed research report.
+FinSight is an **autonomous multi-agent stock intelligence system** purpose-built for the **Indian equity market** (NSE/BSE). It orchestrates **10 specialized AI agents** that run concurrently — fetching live market data, computing technical indicators, analyzing fundamentals, gauging news sentiment via LLMs, assessing risk, predicting price direction with ML, performing deep exploratory data analysis, interpreting macro FII/DII flows, and stress-testing bullish calls through a built-in Critic — then synthesises everything into a single **BUY / HOLD / SELL** verdict with a detailed research report.
 
-The system features a sleek, dark-themed **React dashboard** with real-time progress tracking via Server-Sent Events (SSE), interactive charts (candlestick, correlation heatmap, volatility, confusion matrix), and per-stock drill-down reports.
+The system features a **"War Room"**-themed React dashboard with real-time progress tracking via Server-Sent Events (SSE), interactive candlestick charts (TradingView Lightweight Charts), per-stock drill-down reports, and a three-panel intelligence layout.
 
 > ⚠️ **Disclaimer**: FinSight is built for **educational and research purposes only**. It is not SEBI-registered investment advice. Always consult a qualified financial advisor before making investment decisions.
 
@@ -31,15 +31,17 @@ The system features a sleek, dark-themed **React dashboard** with real-time prog
 
 | Category | Highlights |
 |---|---|
-| **Multi-Agent Pipeline** | 7 autonomous agents run in parallel with orchestrated dependency management |
+| **Multi-Agent Pipeline** | 10 autonomous agents run in parallel across a 4-stage orchestrated pipeline |
 | **Real-Time Streaming** | SSE-based live progress updates — watch each agent complete in real time |
-| **ML Price Prediction** | XGBoost classifier with 27 engineered features for 5-day direction forecasting |
-| **LLM-Powered Analysis** | Sentiment analysis and research report generation via OpenRouter (Claude Haiku) |
-| **Interactive Dashboard** | Dark-themed Next.js 16 UI with Recharts — candlestick charts, radar plots, heatmaps |
+| **Regime-Aware ML** | GradientBoosting ensemble with regime detection (bull/bear/sideways) for 5-day direction forecasting |
+| **LLM-Powered Analysis** | Sentiment analysis, research report generation, and critic challenges via OpenRouter (Claude Haiku) |
+| **War Room Dashboard** | Three-panel Next.js 16 UI — Intelligence Feed, Interactive Chart Room, Verdict Panel |
+| **Macro Flow Intelligence** | NSE FII/DII activity tracking with confidence multiplier adjustment |
+| **Critic Agent** | Automated devil's advocate that stress-tests bullish synthesis calls |
 | **Exploratory Data Analysis** | Statistical distributions, outlier detection, volatility regimes, correlation matrices |
 | **Multi-Stock Support** | Analyze up to 5 NSE/BSE stocks simultaneously with cross-correlation analysis |
 | **Persistent Storage** | SQLite-backed run history with full agent output replay |
-| **Conflict Detection** | Automatic identification of disagreements between agents (e.g., Technical says BUY but Sentiment says SELL) |
+| **Conflict Detection** | Automatic identification of disagreements between agents and macro-flow divergences |
 
 ---
 
@@ -47,47 +49,54 @@ The system features a sleek, dark-themed **React dashboard** with real-time prog
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        FRONTEND (Next.js 16)                        │
-│  ┌───────────┐  ┌──────────────┐  ┌────────────┐  ┌─────────────┐ │
-│  │ Home Page │  │AnalysisView  │  │  EDA Panel  │  │History Page │ │
-│  │(Input)    │  │(Live Status) │  │  (Charts)   │  │(Past Runs)  │ │
-│  └─────┬─────┘  └──────┬───────┘  └──────┬─────┘  └──────┬──────┘ │
-│        └────────────────┴─────────────────┴───────────────┘        │
-│                              │ Axios / SSE                          │
-└──────────────────────────────┼──────────────────────────────────────┘
-                               │
-                     ┌─────────▼─────────┐
-                     │   FastAPI Server   │
-                     │   (REST + SSE)     │
-                     └─────────┬─────────┘
-                               │
-                     ┌─────────▼─────────┐
-                     │   Orchestrator     │
-                     │  (Pipeline Mgr)    │
-                     └─────────┬─────────┘
-                               │
-          ┌────────────────────┼────────────────────┐
-          │                    │                    │
-    ┌─────▼─────┐    ┌────────▼────────┐    ┌──────▼──────┐
-    │  Stage 1   │    │    Stage 2      │    │   Stage 3   │
-    │  Data      │    │  EDA + ML       │    │  Analysis   │
-    │ Ingestion  │    │  (parallel)     │    │  (parallel) │
-    └─────┬─────┘    └────────┬────────┘    └──────┬──────┘
-          │                   │                    │
-          ▼                   ▼                    ▼
-   ┌────────────┐    ┌──────┬──────┐    ┌────┬────┬────┬────┐
-   │  yFinance  │    │ EDA  │  ML  │    │Tech│Fund│Sent│Risk│
-   │  (OHLCV)   │    │Agent │Agent │    │    │    │    │    │
-   └────────────┘    └──────┴──────┘    └────┴────┴──┬─┴────┘
-                                                     │
-                                              ┌──────▼──────┐
-                                              │  Synthesis   │
-                                              │  Agent (LLM) │
-                                              └──────┬──────┘
-                                                     │
-                                              ┌──────▼──────┐
-                                              │   SQLite DB  │
-                                              └─────────────┘
+│                    FRONTEND (Next.js 16 — War Room)                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐             │
+│  │ Intelligence  │  │  Chart Room   │  │   Verdict    │             │
+│  │   Feed (SSE)  │  │(Candlestick) │  │    Panel     │             │
+│  │   28% width   │  │  44% width   │  │  28% width   │             │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘             │
+│         └─────────────────┴─────────────────┘                      │
+│                            │ Axios / SSE                            │
+└────────────────────────────┼────────────────────────────────────────┘
+                             │
+                   ┌─────────▼─────────┐
+                   │   FastAPI Server   │
+                   │   (REST + SSE)     │
+                   └─────────┬─────────┘
+                             │
+                   ┌─────────▼─────────┐
+                   │   Orchestrator     │
+                   │  (Pipeline Mgr)    │
+                   └─────────┬─────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        │                    │                    │
+  ┌─────▼─────┐    ┌────────▼────────┐    ┌──────▼──────┐
+  │  Stage 1   │    │    Stage 2      │    │   Stage 3   │
+  │  Data      │    │ EDA+ML+Macro   │    │  Analysis   │
+  │ Ingestion  │    │  (parallel)     │    │  (parallel) │
+  └─────┬─────┘    └────────┬────────┘    └──────┬──────┘
+        │                   │                    │
+        ▼                   ▼                    ▼
+ ┌────────────┐    ┌──────┬─────┬─────┐  ┌────┬────┬────┬────┐
+ │  yFinance  │    │ EDA  │ ML  │Macro│  │Tech│Fund│Sent│Risk│
+ │  (OHLCV)   │    │Agent │Agent│Agent│  │    │    │    │    │
+ └────────────┘    └──────┴─────┴─────┘  └────┴────┴──┬─┴────┘
+                                                       │
+                                                ┌──────▼──────┐
+                                                │  Synthesis   │
+                                                │  Agent (LLM) │
+                                                └──────┬──────┘
+                                                       │
+                                                ┌──────▼──────┐
+                                                │Critic Agent │
+                                                │(Devil's     │
+                                                │ Advocate)   │
+                                                └──────┬──────┘
+                                                       │
+                                                ┌──────▼──────┐
+                                                │   SQLite DB  │
+                                                └─────────────┘
 ```
 
 ### Pipeline Stages
@@ -95,9 +104,9 @@ The system features a sleek, dark-themed **React dashboard** with real-time prog
 | Stage | Agents | Execution | Description |
 |-------|--------|-----------|-------------|
 | **1** | Data Ingestion | Sequential per symbol | Fetches 1-year daily OHLCV from Yahoo Finance (NSE → BSE fallback) |
-| **2** | EDA + ML Prediction | Parallel | Multi-stock exploratory analysis + XGBoost 5-day direction classifier |
+| **2** | EDA + ML Prediction + Macro | Parallel | Multi-stock EDA + regime-aware ML classifier + NSE FII/DII flows |
 | **3** | Technical + Fundamental + Sentiment + Risk | Parallel per symbol | Core analysis agents run concurrently |
-| **4** | Meta-Synthesis | Sequential per symbol | Weighted signal aggregation + LLM research report generation |
+| **4** | Synthesis → Critic | Sequential per symbol | Weighted signal aggregation + LLM report → critic challenge loop |
 
 ---
 
@@ -131,7 +140,8 @@ The system features a sleek, dark-themed **React dashboard** with real-time prog
 - **Output**: Comprehensive risk profile with reasoning
 
 ### 6. ML Prediction Agent
-- **Model**: Gradient Boosted Classifier (scikit-learn)
+- **Model**: Regime-Aware GradientBoosting Ensemble (scikit-learn)
+- **Regime Detection**: Classifies market as bull/bear/sideways using volatility + SMA slope thresholds; trains separate models per regime
 - **Features**: 27 engineered features across 5 categories:
   - **Momentum** (8): Returns (1d/3d/5d/10d/20d), RSI-14, Momentum-10, ROC-5
   - **Volatility** (6): Rolling vol (5d/10d/20d), ATR-14, BB Width, High-Low Range
@@ -149,13 +159,27 @@ The system features a sleek, dark-themed **React dashboard** with real-time prog
 - **Cross-Correlation**: Pairwise return correlations with relationship labeling
 - **Chart Data**: Returns histogram, 30-day rolling volatility, volume MA ratio, price vs SMA overlays
 
-### 8. Meta-Synthesis Agent
+### 8. Macro Flow Agent
+- **Source**: NSE FII/DII Trade Activity API (`fiidiiTradeReact`)
+- **Method**: Aggregates 5-day net FII and DII flows, classifies as BULLISH / NEUTRAL / BEARISH
+- **Confidence Multiplier**: Adjusts synthesis confidence (1.1× for bullish FII, 0.9× for bearish)
+- **Fallback**: Returns neutral defaults with 1.0× multiplier if NSE API is unreachable
+
+### 9. Meta-Synthesis Agent
 - **Method**: Weighted signal aggregation with dynamic weight adjustment
 - **Base Weights**: Technical (22%), Fundamental (30%), Sentiment (13%), Risk (20%), ML (15%)
 - **Dynamic Adjustment**: Risk level shifts weight from Technical to Fundamental
-- **Conflict Detection**: Identifies BUY vs SELL disagreements across agents
+- **Macro Integration**: Applies FII/DII confidence multiplier to final confidence score
+- **Conflict Detection**: Identifies BUY vs SELL disagreements across agents + macro divergences
 - **Report**: LLM-generated 400-word institutional-grade equity research report
-- **Output**: Final BUY/SELL/HOLD verdict, confidence, price target estimate
+- **Output**: Final BUY/SELL/HOLD verdict, confidence, price target estimate, decision logic map
+
+### 10. Critic Agent (Devil's Advocate)
+- **Trigger**: Activates only when synthesis is strongly bullish (BUY with weighted score > 0.2)
+- **Method**: LLM-powered challenge — identifies top 3 reasons the bullish thesis could be wrong
+- **Penalty Calculation**: Applies 0–15% confidence penalty based on challenge severity
+- **Bonus Penalty**: Extra 5% for challenges involving debt, leverage, or overvaluation
+- **Output**: Challenge list + confidence penalty applied to synthesis result
 
 ---
 
@@ -167,14 +191,15 @@ The system features a sleek, dark-themed **React dashboard** with real-time prog
 | **Python 3.11+** | Core language |
 | **FastAPI** | Async REST API + SSE streaming |
 | **SQLAlchemy 2.0** | ORM with SQLite persistence |
-| **Pydantic v2** | Schema validation with 15+ models |
+| **Pydantic v2** | Schema validation with 20+ models |
 | **yfinance** | Yahoo Finance market data |
 | **pandas + pandas-ta** | Data manipulation + technical indicators |
-| **scikit-learn** | ML pipeline (StandardScaler + GradientBoosting) |
+| **scikit-learn** | ML pipeline (StandardScaler + GradientBoosting regime ensemble) |
 | **scipy** | Statistical tests (Shapiro-Wilk normality) |
 | **feedparser** | Google News RSS parsing |
-| **httpx** | Async HTTP client for OpenRouter LLM calls |
+| **httpx** | Async HTTP client for OpenRouter LLM + NSE API calls |
 | **sse-starlette** | Server-Sent Events for real-time streaming |
+| **python-dotenv** | Environment variable management |
 
 ### Frontend
 | Technology | Purpose |
@@ -182,8 +207,9 @@ The system features a sleek, dark-themed **React dashboard** with real-time prog
 | **Next.js 16** | React framework with App Router |
 | **React 19** | UI components |
 | **TypeScript** | Type-safe frontend |
-| **Tailwind CSS 4** | Utility-first styling (dark theme) |
-| **Recharts** | Interactive charts (candlestick, bar, radar, heatmap) |
+| **Tailwind CSS 4** | Utility-first styling (War Room theme) |
+| **Lightweight Charts v5** | TradingView-powered candlestick chart with markers |
+| **Recharts** | Interactive charts (bar, radar, heatmap, histogram) |
 | **Lucide React** | Icon library |
 | **Axios** | HTTP client for API communication |
 
@@ -232,7 +258,7 @@ SYNTHESIS_MODEL=anthropic/claude-haiku-4-5
 SENTIMENT_MODEL=anthropic/claude-haiku-4-5
 ```
 
-> **Note**: The system works without an API key — sentiment defaults to neutral and reports use template-based generation.
+> **Note**: The system works without an API key — sentiment defaults to neutral, reports use template-based generation, and the critic agent skips LLM challenges.
 
 ### 4. Start the Backend
 
@@ -333,16 +359,19 @@ curl http://localhost:8000/status/{run_id}
 FinSight-Autonomous-Indian-Stock-Intelligence-System/
 ├── backend/
 │   ├── agents/
+│   │   ├── __init__.py
 │   │   ├── data_ingestion.py     # Yahoo Finance OHLCV fetcher
 │   │   ├── technical.py          # RSI, MACD, Bollinger, SMA analysis
 │   │   ├── fundamental.py        # PE, PB, D/E, ROE valuation
 │   │   ├── sentiment.py          # News RSS + LLM sentiment
 │   │   ├── risk.py               # Beta, VaR, Sharpe, drawdown
-│   │   ├── ml_agent.py           # XGBoost 5-day direction predictor
+│   │   ├── ml_agent.py           # Regime-aware GradientBoosting ensemble
 │   │   ├── eda_agent.py          # Exploratory data analysis
-│   │   └── synthesis.py          # Meta-synthesis + report generation
+│   │   ├── macro_agent.py        # NSE FII/DII flow analysis
+│   │   ├── synthesis.py          # Meta-synthesis + report generation
+│   │   └── critic.py             # Devil's advocate challenge agent
 │   ├── models/
-│   │   └── schemas.py            # 15+ Pydantic v2 models
+│   │   └── schemas.py            # 20+ Pydantic v2 models
 │   ├── database.py               # SQLAlchemy ORM + CRUD operations
 │   ├── orchestrator.py           # 4-stage async pipeline coordinator
 │   ├── main.py                   # FastAPI app with REST + SSE endpoints
@@ -350,23 +379,22 @@ FinSight-Autonomous-Indian-Stock-Intelligence-System/
 ├── frontend/
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── page.tsx          # Home page with stock input
-│   │   │   ├── layout.tsx        # Root layout with metadata
-│   │   │   ├── globals.css       # Global styles
-│   │   │   ├── run/              # Analysis run detail page
-│   │   │   └── history/          # Past runs history page
+│   │   │   ├── page.tsx          # Intelligence Terminal (stock input)
+│   │   │   ├── layout.tsx        # Root layout with metadata + fonts
+│   │   │   ├── globals.css       # War Room theme + CSS variables
+│   │   │   ├── run/[runId]/
+│   │   │   │   └── page.tsx      # War Room 3-panel analysis view
+│   │   │   └── history/
+│   │   │       └── page.tsx      # Mission Archive (past runs)
 │   │   ├── components/
-│   │   │   ├── AgentCard.tsx          # Individual agent status card
-│   │   │   ├── AgentGrid.tsx          # Grid layout for agent cards
-│   │   │   ├── AnalysisProgress.tsx   # Real-time progress tracker
-│   │   │   ├── ConfidenceRadar.tsx    # Radar chart for multi-agent confidence
-│   │   │   ├── EDASection.tsx         # EDA results display
 │   │   │   ├── Navbar.tsx             # Navigation bar
-│   │   │   ├── PortfolioEDASection.tsx# Cross-stock analysis view
-│   │   │   ├── SignalBadge.tsx        # BUY/SELL/HOLD signal badges
-│   │   │   ├── VerdictCard.tsx        # Final verdict display card
+│   │   │   ├── IntelligenceFeed.tsx   # Real-time agent status feed (SSE)
+│   │   │   ├── VerdictPanel.tsx       # Final verdict + confidence display
+│   │   │   ├── EvidenceTrail.tsx      # Agent decision logic trail
+│   │   │   ├── warroom/
+│   │   │   │   └── ChartRoom.tsx      # Chart panel wrapper
 │   │   │   └── charts/
-│   │   │       ├── CandlestickChart.tsx      # OHLC price chart
+│   │   │       ├── CandlestickChart.tsx      # TradingView lightweight-charts
 │   │   │       ├── ConfusionMatrix.tsx       # ML model confusion matrix
 │   │   │       ├── CorrelationHeatmap.tsx    # Cross-stock correlation
 │   │   │       ├── FeatureImportanceChart.tsx# ML feature importance
@@ -375,7 +403,8 @@ FinSight-Autonomous-Indian-Stock-Intelligence-System/
 │   │   │       └── VolatilityChart.tsx       # Rolling volatility
 │   │   └── lib/
 │   │       ├── api.ts             # Typed API client (Axios)
-│   │       └── utils.ts           # Utility functions
+│   │       └── utils.ts           # Signal colors, formatting utilities
+│   ├── next.config.ts
 │   ├── package.json
 │   └── tsconfig.json
 ├── .env.example                   # Environment variable template
@@ -408,6 +437,8 @@ ML:          15%  ████████
 Sentiment:   13%  ███████
 ```
 
+After synthesis, the Macro Flow agent applies a confidence multiplier (0.9×–1.1×), and the Critic agent may apply an additional penalty (0–15%).
+
 ---
 
 ## 🧪 Usage Examples
@@ -416,7 +447,7 @@ Sentiment:   13%  ███████
 ```
 Input: RELIANCE
 ```
-Analyzes Reliance Industries across all 7 agents and produces a comprehensive verdict.
+Analyzes Reliance Industries across all 10 agents and produces a comprehensive verdict.
 
 ### Multi-Stock Comparison
 ```
@@ -432,33 +463,33 @@ Any valid **NSE** or **BSE** ticker symbol. Examples:
 
 ---
 
-## 📊 Dashboard Features
+## 📊 War Room Dashboard
 
-### Analysis Progress View
-- Real-time agent status tracking with color-coded states (pending → running → completed/failed)
+### Intelligence Feed (Left Panel)
+- Real-time SSE-powered agent status feed with animated transitions
 - Per-agent signal badges (BUY/SELL/HOLD) and confidence scores
-- Animated progress indicators during analysis
+- Live progress tracking with color-coded states (pending → running → completed/failed)
 
-### Verdict Cards
+### Chart Room (Center Panel)
+- **Candlestick Chart** — TradingView Lightweight Charts v5 with OHLCV data
+- **Agent Signal Markers** — Visual arrows on chart for each agent's signal
+- **Time Range Selector** — 1M / 3M / 6M / 1Y view toggles
+- **Volume Overlay** — Color-coded volume bars (green for up, red for down)
+
+### Verdict Panel (Right Panel)
 - Final BUY/SELL/HOLD verdict with confidence percentage
 - Price target estimate with directional indicator
 - Agent weight breakdown visualization
-- Conflict detection alerts
+- Conflict detection and macro flow warnings
 
-### Interactive Charts
-- **Candlestick Chart** — OHLC price visualization
-- **Confidence Radar** — Multi-agent confidence comparison
-- **Correlation Heatmap** — Cross-stock return correlations
-- **Returns Histogram** — Distribution of daily returns
-- **Volatility Chart** — 30-day rolling volatility over time
-- **Feature Importance** — Top ML model feature drivers
-- **Confusion Matrix** — ML model classification performance
+### Evidence Trail (Center Bottom)
+- Interactive agent decision cards showing signal, weight, and key triggers
+- Critic challenge display for bullish calls
+- Hover-to-highlight: hovering a card highlights corresponding chart marker
 
-### EDA Dashboard
-- Statistical distribution summaries (returns & volume)
-- Outlier event detection with z-scores
-- Volatility regime classification
-- Portfolio-level cross-stock insights
+### History Page (Mission Archive)
+- Tabular view of all past analysis runs
+- Status badges, duration tracking, and direct links to War Room views
 
 ---
 
@@ -486,7 +517,9 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 - [OpenRouter](https://openrouter.ai/) for LLM API access
 - [Google News RSS](https://news.google.com/) for financial news headlines
 - [pandas-ta](https://github.com/twopirllc/pandas-ta) for technical indicators
+- [TradingView Lightweight Charts](https://tradingview.github.io/lightweight-charts/) for candlestick rendering
 - [Recharts](https://recharts.org/) for React charting components
+- [NSE India](https://www.nseindia.com/) for FII/DII activity data
 
 ---
 

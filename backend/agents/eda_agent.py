@@ -72,34 +72,40 @@ def _detect_outliers(
     """Detect volume spikes, price gap-ups and gap-downs via z-scores."""
     outliers: list[OutlierInfo] = []
     threshold = 2.5
+    n_dates = len(dates)
 
     # --- Volume spikes ---
-    vol_z = (volumes - volumes.mean()) / volumes.std()
-    vol_outlier_mask = vol_z.abs() > threshold
-    for idx in vol_z[vol_outlier_mask].index:
-        outliers.append(
-            OutlierInfo(
-                date=dates[idx],
-                value=float(volumes.iloc[idx]),
-                z_score=round(float(vol_z.iloc[idx]), 2),
-                event_type="volume spike",
-            )
-        )
+    vol_std = volumes.std()
+    if vol_std > 0:
+        vol_z = (volumes - volumes.mean()) / vol_std
+        vol_outlier_mask = vol_z.abs() > threshold
+        for idx in vol_z[vol_outlier_mask].index:
+            if idx < n_dates:
+                outliers.append(
+                    OutlierInfo(
+                        date=dates[idx],
+                        value=float(volumes.iloc[idx]) if idx < len(volumes) else 0.0,
+                        z_score=round(float(vol_z.loc[idx]), 2),
+                        event_type="volume spike",
+                    )
+                )
 
     # --- Price gap ups / downs ---
-    ret_z = (daily_returns - daily_returns.mean()) / daily_returns.std()
-    for idx in ret_z.dropna().index:
-        z = float(ret_z.iloc[idx])
-        if abs(z) > threshold:
-            event_type = "price gap up" if z > 0 else "price gap down"
-            outliers.append(
-                OutlierInfo(
-                    date=dates[idx],
-                    value=round(float(daily_returns.iloc[idx]) * 100, 2),
-                    z_score=round(z, 2),
-                    event_type=event_type,
+    ret_std = daily_returns.std()
+    if ret_std > 0:
+        ret_z = (daily_returns - daily_returns.mean()) / ret_std
+        for idx in ret_z.dropna().index:
+            z = float(ret_z.loc[idx])
+            if abs(z) > threshold and idx < n_dates:
+                event_type = "price gap up" if z > 0 else "price gap down"
+                outliers.append(
+                    OutlierInfo(
+                        date=dates[idx],
+                        value=round(float(daily_returns.loc[idx]) * 100, 2),
+                        z_score=round(z, 2),
+                        event_type=event_type,
+                    )
                 )
-            )
 
     # Sort by abs(z_score) descending, take top 5
     outliers.sort(key=lambda o: abs(o.z_score), reverse=True)
@@ -191,12 +197,17 @@ async def analyze_single(symbol: str, ohlcv: OHLCVData) -> EDAResult:
 
     # ── 4. Volatility regime ────────────────────────────────────────
     rolling_vol_30 = daily_returns.rolling(30).std() * np.sqrt(252)
-    current_vol = float(rolling_vol_30.iloc[-1])
-    percentile = float(
-        stats.percentileofscore(rolling_vol_30.dropna(), current_vol)
-    )
+    rolling_vol_clean = rolling_vol_30.dropna()
+    if len(rolling_vol_clean) > 0:
+        current_vol = float(rolling_vol_clean.iloc[-1])
+        percentile = float(
+            stats.percentileofscore(rolling_vol_clean, current_vol)
+        )
+    else:
+        current_vol = float(daily_returns.std() * np.sqrt(252)) if len(daily_returns) > 1 else 0.25
+        percentile = 50.0
     regime = _classify_regime(current_vol)
-    avg_daily_move_pct = float(daily_returns.abs().mean() * 100)
+    avg_daily_move_pct = float(daily_returns.abs().mean() * 100) if len(daily_returns) > 0 else 1.0
     regime_started = _find_regime_start(rolling_vol_30, regime, ohlcv.dates)
 
     volatility_regime = VolatilityRegime(
@@ -217,18 +228,20 @@ async def analyze_single(symbol: str, ohlcv: OHLCVData) -> EDAResult:
     returns_histogram = {"bins": bins, "counts": hist.tolist()}
 
     # Rolling volatility (30d)
-    rolling_vol_clean = rolling_vol_30.dropna()
+    rolling_vol_clean_chart = rolling_vol_30.dropna()
+    vol_start = len(ohlcv.dates) - len(rolling_vol_clean_chart)
     rolling_volatility_30d = {
-        "dates": ohlcv.dates[29:],  # skip NaN period
-        "values": (rolling_vol_clean * 100).round(2).tolist(),
+        "dates": ohlcv.dates[vol_start:],
+        "values": (rolling_vol_clean_chart * 100).round(2).tolist(),
     }
 
     # Volume / MA-20 ratio
     vol_ma20 = volumes.rolling(20).mean()
     ratio = (volumes / vol_ma20).round(2)
     ratio_clean = ratio.dropna()
+    ratio_start = len(ohlcv.dates) - len(ratio_clean)
     volume_ma_ratio = {
-        "dates": ohlcv.dates[19:],
+        "dates": ohlcv.dates[ratio_start:],
         "values": ratio_clean.tolist(),
     }
 

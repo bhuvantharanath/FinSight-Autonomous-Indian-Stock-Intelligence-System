@@ -33,6 +33,13 @@ export interface SynthesisResult {
   summary: string;
   detailed_report: string;
   agent_weights: Record<string, number>;
+  logic_map: Array<{
+    agent: string;
+    signal: string;
+    weight: number;
+    contribution?: number;
+    triggers?: string[];
+  }>;
   conflict_notes: string | null;
   generated_at: string;
 }
@@ -141,6 +148,7 @@ export interface MultiStockEDA {
 export interface MLPrediction {
   symbol: string;
   prediction_horizon: string;
+  regime: "bull" | "bear" | "sideways";
   predicted_direction: "UP" | "DOWN" | "SIDEWAYS";
   prediction_confidence: number;
   feature_importances: Array<{

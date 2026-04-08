@@ -73,6 +73,8 @@ FEATURE_CATEGORIES: dict[str, list[str]] = {
     ],
 }
 
+REGIMES: tuple[str, str, str] = ("bull", "bear", "sideways")
+
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -210,6 +212,155 @@ def _feature_category(feature_name: str) -> str:
     return "other"
 
 
+def _regime_inputs(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    if "Close" not in df.columns:
+        raise ValueError("detect_regime requires a DataFrame with a 'Close' column")
+
+    close = df["Close"].astype(float)
+    returns = close.pct_change()
+
+    # Rolling 20-day realized volatility (in decimal terms, e.g. 0.012 == 1.2%).
+    rolling_volatility = returns.rolling(20).std()
+
+    # 50-day SMA slope as daily percent change of the SMA value.
+    sma_50 = close.rolling(50).mean()
+
+    # When only a short window is supplied (e.g. last 30 days at inference),
+    # use the longest available rolling window to preserve trend direction.
+    if sma_50.notna().sum() < 2:
+        adaptive_window = max(5, min(50, len(close)))
+        sma_50 = close.rolling(adaptive_window, min_periods=2).mean()
+
+    sma_slope_pct = sma_50.pct_change() * 100
+
+    return rolling_volatility, sma_slope_pct
+
+
+def detect_regime(df: pd.DataFrame) -> str:
+    """
+    Classify market regime based on volatility and SMA slope thresholds.
+
+    - bull: vol < 1.2% and slope > 0
+    - bear: vol > 2.0% or slope < -0.5%
+    - sideways: otherwise
+    """
+    if df.empty:
+        return "sideways"
+
+    rolling_volatility, sma_slope_pct = _regime_inputs(df)
+
+    latest_vol = float(rolling_volatility.iloc[-1]) if pd.notna(rolling_volatility.iloc[-1]) else 0.0
+    latest_slope = float(sma_slope_pct.iloc[-1]) if pd.notna(sma_slope_pct.iloc[-1]) else 0.0
+
+    if latest_vol < 0.012 and latest_slope > 0:
+        return "bull"
+    if latest_vol > 0.02 or latest_slope < -0.5:
+        return "bear"
+    return "sideways"
+
+
+def _detect_regime_series(df: pd.DataFrame) -> pd.Series:
+    rolling_volatility, sma_slope_pct = _regime_inputs(df)
+    regimes = pd.Series("sideways", index=df.index, dtype="object")
+
+    bull_mask = (rolling_volatility < 0.012) & (sma_slope_pct > 0)
+    bear_mask = (rolling_volatility > 0.02) | (sma_slope_pct < -0.5)
+
+    regimes[bull_mask] = "bull"
+    regimes[bear_mask] = "bear"
+
+    return regimes.fillna("sideways")
+
+
+class RegimeAwareGradientBoosting:
+    """Regime-aware ensemble of GradientBoosting classifiers."""
+
+    def __init__(self) -> None:
+        self.models: dict[str, Pipeline] = {}
+
+    @staticmethod
+    def _build_pipeline() -> Pipeline:
+        return Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                (
+                    "model",
+                    GradientBoostingClassifier(
+                        n_estimators=100,
+                        learning_rate=0.1,
+                        max_depth=4,
+                        subsample=0.8,
+                        random_state=42,
+                    ),
+                ),
+            ]
+        )
+
+    def _train_model(
+        self,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        training_market_df: pd.DataFrame,
+    ) -> None:
+        """
+        Train one model per regime.
+        If a regime subset has < 60 samples, fall back to the full training set.
+        """
+        regime_by_date = (
+            _detect_regime_series(training_market_df)
+            .reindex(X_train.index)
+            .fillna("sideways")
+        )
+
+        for regime in REGIMES:
+            subset_idx = regime_by_date[regime_by_date == regime].index
+
+            X_subset = X_train.loc[subset_idx]
+            y_subset = y_train.loc[subset_idx]
+
+            # Also fall back when the subset does not contain at least 2 classes.
+            if len(X_subset) < 60 or y_subset.nunique() < 2:
+                X_subset = X_train
+                y_subset = y_train
+
+            pipeline = self._build_pipeline()
+            pipeline.fit(X_subset, y_subset)
+            self.models[regime] = pipeline
+
+    def predict(
+        self,
+        features: pd.DataFrame,
+        recent_market_df: pd.DataFrame,
+    ) -> tuple[int, np.ndarray, str]:
+        if not self.models:
+            raise ValueError("Model ensemble is not trained")
+
+        regime = detect_regime(recent_market_df.tail(30))
+        model = self.models.get(regime)
+
+        if model is None:
+            regime = "sideways"
+            model = self.models.get("sideways") or next(iter(self.models.values()))
+
+        predicted_class = int(model.predict(features)[0])
+        probabilities = model.predict_proba(features)[0]
+        return predicted_class, probabilities, regime
+
+    def predict_batch(
+        self,
+        features: pd.DataFrame,
+        market_df: pd.DataFrame,
+    ) -> np.ndarray:
+        predictions: list[int] = []
+
+        for idx in features.index:
+            recent_window = market_df.loc[:idx].tail(30)
+            predicted_class, _, _ = self.predict(features.loc[[idx]], recent_window)
+            predictions.append(predicted_class)
+
+        return np.asarray(predictions, dtype=int)
+
+
 async def run(symbol: str, ohlcv: OHLCVData) -> MLPrediction:
     """
     Run the ML prediction pipeline on OHLCV data.
@@ -236,7 +387,7 @@ async def run(symbol: str, ohlcv: OHLCVData) -> MLPrediction:
     X = dataset[feature_columns]
     y = dataset["target"].astype(int)
 
-    if len(X) < 50:
+    if len(X) < 30:
         raise ValueError("Insufficient data for ML")
 
     tscv = TimeSeriesSplit(n_splits=5)
@@ -248,26 +399,21 @@ async def run(symbol: str, ohlcv: OHLCVData) -> MLPrediction:
     if y_train.nunique() < 2:
         raise ValueError("Insufficient class diversity for ML")
 
-    pipeline = Pipeline(
-        [
-            ("scaler", StandardScaler()),
-            (
-                "model",
-                GradientBoostingClassifier(
-                    n_estimators=100,
-                    learning_rate=0.1,
-                    max_depth=4,
-                    subsample=0.8,
-                    random_state=42,
-                ),
-            ),
-        ]
+    ensemble = RegimeAwareGradientBoosting()
+    loop = asyncio.get_running_loop()
+
+    train_market_df = feature_df.loc[X_train.index, ["Close"]]
+    full_market_df = feature_df.loc[X.index, ["Close"]]
+
+    await loop.run_in_executor(
+        None,
+        lambda: ensemble._train_model(X_train, y_train, train_market_df),
     )
 
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, pipeline.fit, X_train, y_train)
-
-    y_pred = await loop.run_in_executor(None, pipeline.predict, X_test)
+    y_pred = await loop.run_in_executor(
+        None,
+        lambda: ensemble.predict_batch(X_test, full_market_df),
+    )
 
     metrics = ModelMetrics(
         accuracy=float(accuracy_score(y_test, y_pred)),
@@ -283,12 +429,21 @@ async def run(symbol: str, ohlcv: OHLCVData) -> MLPrediction:
     )
 
     latest_features = X.iloc[[-1]]
-    predicted_class = int((await loop.run_in_executor(None, pipeline.predict, latest_features))[0])
-    proba = await loop.run_in_executor(None, pipeline.predict_proba, latest_features)
-    confidence = float(np.max(proba[0]))
+
+    latest_window = full_market_df.loc[: latest_features.index[-1]].tail(30)
+    predicted_class, probabilities, active_regime = await loop.run_in_executor(
+        None,
+        lambda: ensemble.predict(latest_features, latest_window),
+    )
+
+    confidence = float(np.max(probabilities))
     direction = ["DOWN", "SIDEWAYS", "UP"][predicted_class]
 
-    importances = pipeline.named_steps["model"].feature_importances_
+    selected_model = ensemble.models.get(active_regime)
+    if selected_model is None:
+        selected_model = ensemble.models.get("sideways") or next(iter(ensemble.models.values()))
+
+    importances = selected_model.named_steps["model"].feature_importances_
     feat_imp_df = (
         pd.DataFrame(
             {
@@ -325,20 +480,22 @@ async def run(symbol: str, ohlcv: OHLCVData) -> MLPrediction:
 
     top_feature = str(feat_imp_df.iloc[0]["feature"]) if not feat_imp_df.empty else "N/A"
     reasoning = (
-        f"The XGBoost model trained on {len(X_train)} samples with {len(X.columns)} engineered features predicts "
+        f"The regime-aware GradientBoosting ensemble selected the '{active_regime}' model and predicts "
         f"a {direction} move in the next 5 trading days with {confidence:.0%} confidence. "
-        f"The model achieved {metrics.f1_score:.0%} weighted F1 score on the held-out test set, with "
+        f"Across {len(X_train)} training samples and {len(X.columns)} engineered features, it achieved "
+        f"{metrics.f1_score:.0%} weighted F1 on the held-out test set, with "
         f"{top_feature} being the most predictive feature."
     )
 
     return MLPrediction(
         symbol=symbol,
         prediction_horizon="5-day direction",
+        regime=active_regime,
         predicted_direction=direction,
         prediction_confidence=confidence,
         feature_importances=feature_importances,
         model_metrics=metrics,
-        model_name="XGBoost Classifier",
+        model_name="Regime-Aware GradientBoosting Ensemble",
         feature_count=len(feature_columns),
         signal=signal,
         reasoning=reasoning,

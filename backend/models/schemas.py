@@ -100,6 +100,7 @@ class TechnicalSignals(BaseModel):
     signal: Literal["BUY", "SELL", "HOLD"]
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
+    key_triggers: list[str] = Field(default_factory=list)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -120,6 +121,7 @@ class FundamentalData(BaseModel):
     signal: Literal["BUY", "SELL", "HOLD"]
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
+    key_triggers: list[str] = Field(default_factory=list)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -152,10 +154,24 @@ class RiskMetrics(BaseModel):
     volatility_annualized: float
     risk_level: Literal["LOW", "MEDIUM", "HIGH"]
     reasoning: str
+    key_triggers: list[str] = Field(default_factory=list)
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 8. ML Prediction
+# 8. Macro Result
+# ──────────────────────────────────────────────────────────────────────
+class MacroResult(BaseModel):
+    """Output of the Macro Flow agent using NSE FII/DII activity."""
+
+    fii_net_5d: float
+    dii_net_5d: float
+    macro_signal: Literal["BULLISH", "BEARISH", "NEUTRAL"]
+    confidence_multiplier: float = Field(ge=0.5, le=1.5)
+    reasoning: str
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 9. ML Prediction
 # ──────────────────────────────────────────────────────────────────────
 class FeatureImportance(BaseModel):
     """Relative importance of an engineered ML feature."""
@@ -183,18 +199,19 @@ class MLPrediction(BaseModel):
 
     symbol: str
     prediction_horizon: str  # "5-day direction"
+    regime: str = Field(default="sideways")  # "bull", "bear", "sideways"
     predicted_direction: str  # "UP", "DOWN", "SIDEWAYS"
     prediction_confidence: float = Field(ge=0.0, le=1.0)
     feature_importances: list[FeatureImportance]  # top 10
     model_metrics: ModelMetrics
-    model_name: str  # "XGBoost Classifier"
+    model_name: str  # "Regime-Aware GradientBoosting Ensemble"
     feature_count: int  # total features engineered
     signal: str  # "BUY" if UP, "SELL" if DOWN, "HOLD" if SIDEWAYS
     reasoning: str  # 2-sentence explanation
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 9. SynthesisResult
+# 10. SynthesisResult
 # ──────────────────────────────────────────────────────────────────────
 class SynthesisResult(BaseModel):
     """Final synthesised verdict produced by the Meta-Synthesis agent."""
@@ -202,6 +219,12 @@ class SynthesisResult(BaseModel):
     symbol: str
     final_verdict: Literal["BUY", "SELL", "HOLD"]
     overall_confidence: float = Field(ge=0.0, le=1.0)
+    weighted_score: float = Field(
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="Raw weighted score before verdict bucketing",
+    )
     price_target_pct: float
     summary: str
     detailed_report: str
@@ -209,14 +232,33 @@ class SynthesisResult(BaseModel):
         default_factory=dict,
         description="Weight given to each agent in the final synthesis",
     )
+    logic_map: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "Per-agent decision breakdown including signal, applied weight, "
+            "and key trigger strings"
+        ),
+    )
     conflict_notes: Optional[str] = None
+    macro_warning: Optional[str] = None
     generated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 10. RunStatus
+# 11. CriticResult
+# ──────────────────────────────────────────────────────────────────────
+class CriticResult(BaseModel):
+    """Output of the Critic agent that challenges bullish synthesis."""
+
+    symbol: str
+    challenges: list[str] = Field(default_factory=list)
+    confidence_penalty: float = Field(ge=0.0, le=0.15)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 12. RunStatus
 # ──────────────────────────────────────────────────────────────────────
 class RunStatus(BaseModel):
     """Top-level status object for a complete analysis run."""
@@ -231,7 +273,7 @@ class RunStatus(BaseModel):
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 11. EDA — Exploratory Data Analysis
+# 13. EDA — Exploratory Data Analysis
 # ──────────────────────────────────────────────────────────────────────
 class DistributionStats(BaseModel):
     """Statistical summary of a numeric distribution."""

@@ -255,6 +255,7 @@ async def report(run_id: str, symbol: str) -> JSONResponse:
             "confidence": synthesis.overall_confidence,
             "summary": synthesis.summary,
             "detailed_report": synthesis.detailed_report,
+            "logic_map": synthesis.logic_map,
             "generated_at": synthesis.generated_at.isoformat(),
         }
     )

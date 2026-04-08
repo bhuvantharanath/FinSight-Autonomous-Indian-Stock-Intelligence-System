@@ -68,26 +68,57 @@ async def run(symbol: str, ohlcv: OHLCVData) -> TechnicalSignals:
     score = 0
 
     # RSI
+    rsi_contrib = 0
     if rsi < 30:
-        score += 2
+        rsi_contrib = 2
+        rsi_trigger = f"RSI={rsi:.1f} crossed below 30 (oversold, +2)"
     elif rsi < 50:
-        score += 1
+        rsi_contrib = 1
+        rsi_trigger = f"RSI={rsi:.1f} below 50 (weak momentum, +1)"
     elif rsi > 70:
-        score -= 2
+        rsi_contrib = -2
+        rsi_trigger = f"RSI={rsi:.1f} crossed above 70 (overbought, -2)"
     else:  # 50–70
-        score -= 1
+        rsi_contrib = -1
+        rsi_trigger = f"RSI={rsi:.1f} in 50-70 band (late-cycle momentum, -1)"
+    score += rsi_contrib
 
     # MACD vs signal line
+    macd_contrib = 0
     if macd_val > macd_signal:
-        score += 2
+        macd_contrib = 2
+        macd_trigger = (
+            f"MACD={macd_val:.4f} above signal={macd_signal:.4f} "
+            f"(bullish momentum, +2)"
+        )
     else:
-        score -= 2
+        macd_contrib = -2
+        macd_trigger = (
+            f"MACD={macd_val:.4f} below signal={macd_signal:.4f} "
+            f"(bearish momentum, -2)"
+        )
+    score += macd_contrib
 
     # Bollinger Band position
+    bb_contrib = 0
     if price < bb_lower:
-        score += 1
+        bb_contrib = 1
+        bb_trigger = (
+            f"Price={price:.2f} below lower BB={bb_lower:.2f} "
+            f"(oversold zone, +1)"
+        )
     elif price > bb_upper:
-        score -= 1
+        bb_contrib = -1
+        bb_trigger = (
+            f"Price={price:.2f} above upper BB={bb_upper:.2f} "
+            f"(overbought zone, -1)"
+        )
+    else:
+        bb_trigger = (
+            f"Price={price:.2f} between BB lower={bb_lower:.2f} and upper={bb_upper:.2f} "
+            f"(neutral band position, +0)"
+        )
+    score += bb_contrib
 
     # Trend
     if trend == "bullish":
@@ -111,6 +142,7 @@ async def run(symbol: str, ohlcv: OHLCVData) -> TechnicalSignals:
 
     max_possible = 8
     confidence = round(min(abs(score) / max_possible, 1.0), 2)
+    key_triggers = [rsi_trigger, macd_trigger, bb_trigger]
 
     # ── Human-readable reasoning ────────────────────────────────────
     reasoning = (
@@ -140,4 +172,5 @@ async def run(symbol: str, ohlcv: OHLCVData) -> TechnicalSignals:
         signal=signal,
         confidence=confidence,
         reasoning=reasoning,
+        key_triggers=key_triggers,
     )

@@ -2,16 +2,27 @@
 
 @theme inline {
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-playfair), ui-serif, Georgia, serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+
+  /* War Room Colors */
+  --color-war-bg: #F5F2EC;
+  --color-war-border: #D4C9A8;
+  --color-war-buy: #1B4332;
+  --color-war-sell: #7F1D1D;
+  --color-war-text: #1a1a1a;
+  --color-war-muted: #666666;
 }
 
-/* Force dark mode - no light mode */
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
-  background-color: #020617; /* slate-950 */
-  color: #f8fafc; /* slate-50 */
+  background-color: var(--color-war-bg);
+  color: var(--color-war-text);
+  margin: 0;
+  padding: 0;
 }
 
 /* Smooth scrolling */
@@ -19,23 +30,30 @@ html {
   scroll-behavior: smooth;
 }
 
-/* Custom scrollbar for dark theme */
+/* Custom scrollbar for War Room theme */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0f172a; /* slate-900 */
+  background: var(--color-war-bg);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155; /* slate-700 */
-  border-radius: 3px;
+  background: var(--color-war-border);
+  border-radius: 0px; /* No rounded corners */
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569; /* slate-600 */
+  background: #b5aa8d;
+}
+
+/* Base resets for War Room aesthetics */
+* {
+  border-color: var(--color-war-border);
+  border-radius: 0 !important; /* Strict sharp corners everywhere */
+  box-shadow: none !important; /* No shadows */
 }
 
 /* Line clamp utility */

@@ -14,6 +14,7 @@ import httpx
 
 from backend.models.schemas import (
     FundamentalData,
+    MacroResult,
     MLPrediction,
     RiskMetrics,
     SentimentData,
@@ -86,6 +87,7 @@ async def _generate_report(
     sentiment: SentimentData,
     risk: RiskMetrics,
     ml_prediction: MLPrediction,
+    macro_result: MacroResult,
     conflict_notes: str | None,
 ) -> str:
     """Call OpenRouter to generate a detailed research report."""
@@ -99,6 +101,7 @@ async def _generate_report(
             sentiment,
             risk,
             ml_prediction,
+            macro_result,
         )
 
     system_prompt = (
@@ -150,6 +153,12 @@ RISK DATA:
 - Max Drawdown: {risk.max_drawdown:.1%}
 - Risk Level: {risk.risk_level}
 
+MACRO FLOW DATA (NSE FII/DII):
+- FII Net (5D): {macro_result.fii_net_5d:+.2f} Cr
+- DII Net (5D): {macro_result.dii_net_5d:+.2f} Cr
+- Macro Signal: {macro_result.macro_signal}
+- Confidence Multiplier Applied: {macro_result.confidence_multiplier:.1f}x
+
 {f'CONFLICTS: {conflict_notes}' if conflict_notes else 'No agent conflicts detected.'}
 
 Structure the report with these sections:
@@ -159,7 +168,8 @@ Structure the report with these sections:
 4. **Market Sentiment** — News themes and market mood
 5. **ML Outlook** — Model direction signal, confidence, and key drivers
 6. **Risk Assessment** — Volatility, beta, drawdown profile
-7. **Investment Verdict** — Final recommendation with rationale
+7. **Macro Flows** — FII/DII context and how it impacts conviction
+8. **Investment Verdict** — Final recommendation with rationale
 
 End with: "Disclaimer: This report is AI-generated for educational purposes only and does not constitute investment advice. Consult a SEBI-registered advisor before making investment decisions."
 """
@@ -197,6 +207,7 @@ End with: "Disclaimer: This report is AI-generated for educational purposes only
             sentiment,
             risk,
             ml_prediction,
+            macro_result,
         )
 
 
@@ -209,6 +220,7 @@ def _fallback_report(
     sentiment: SentimentData,
     risk: RiskMetrics,
     ml_prediction: MLPrediction,
+    macro_result: MacroResult,
 ) -> str:
     """Generate a template-based report when LLM is unavailable."""
     return f"""# {symbol} — Equity Research Report
@@ -231,6 +243,9 @@ The {ml_prediction.model_name} forecasts a {ml_prediction.predicted_direction} m
 ## Risk Assessment
 {symbol} has a beta of {risk.beta:.2f} vs Nifty 50 with annualised volatility of {risk.volatility_annualized:.1%}. VaR-95 is {risk.var_95:.2%} daily, and max drawdown is {risk.max_drawdown:.1%}. Risk level: {risk.risk_level}.
 
+## Macro Flows
+NSE FII/DII activity over the last 5 sessions shows FII net flow of {macro_result.fii_net_5d:+.2f} Cr and DII net flow of {macro_result.dii_net_5d:+.2f} Cr. This maps to a {macro_result.macro_signal} macro signal and applies a {macro_result.confidence_multiplier:.1f}x confidence multiplier.
+
 ## Investment Verdict
 **{verdict}** with {confidence:.0%} confidence.
 
@@ -245,6 +260,7 @@ async def run(
     sentiment: SentimentData,
     risk: RiskMetrics,
     ml_prediction: MLPrediction,
+    macro_result: MacroResult,
 ) -> SynthesisResult:
     """
     Synthesise all agent outputs into a final verdict and report.
@@ -273,7 +289,67 @@ async def run(
         + ml_num * ml_prediction.prediction_confidence * weights["ml_prediction"]
     )
 
-    # ── 4. Final verdict ────────────────────────────────────────────
+    # ── 4. Decision logic traceability map ──────────────────────────
+    risk_signal = {"LOW": "BUY", "MEDIUM": "HOLD", "HIGH": "SELL"}.get(
+        risk.risk_level,
+        "HOLD",
+    )
+
+    sentiment_triggers = [
+        f"Sentiment score={sentiment.sentiment_score:.2f} ({sentiment.sentiment_label})"
+    ]
+    if sentiment.key_themes:
+        sentiment_triggers.append(
+            f"Themes: {', '.join(sentiment.key_themes[:3])}"
+        )
+
+    ml_triggers = [
+        (
+            f"Predicted direction={ml_prediction.predicted_direction} "
+            f"for {ml_prediction.prediction_horizon} ({ml_prediction.signal})"
+        ),
+        f"Model confidence={ml_prediction.prediction_confidence:.0%}",
+    ]
+    if ml_prediction.feature_importances:
+        top_feature = ml_prediction.feature_importances[0]
+        ml_triggers.append(
+            f"Top feature: {top_feature.feature_name} (importance {top_feature.importance:.2f})"
+        )
+
+    logic_map: list[dict] = [
+        {
+            "agent": "technical",
+            "signal": technical.signal,
+            "weight_applied": round(weights["technical"], 2),
+            "key_triggers": list(getattr(technical, "key_triggers", [])),
+        },
+        {
+            "agent": "fundamental",
+            "signal": fundamental.signal,
+            "weight_applied": round(weights["fundamental"], 2),
+            "key_triggers": list(getattr(fundamental, "key_triggers", [])),
+        },
+        {
+            "agent": "sentiment",
+            "signal": sentiment.signal,
+            "weight_applied": round(weights["sentiment"], 2),
+            "key_triggers": sentiment_triggers,
+        },
+        {
+            "agent": "risk",
+            "signal": risk_signal,
+            "weight_applied": round(weights["risk"], 2),
+            "key_triggers": list(getattr(risk, "key_triggers", [])),
+        },
+        {
+            "agent": "ml_prediction",
+            "signal": ml_prediction.signal,
+            "weight_applied": round(weights["ml_prediction"], 2),
+            "key_triggers": ml_triggers,
+        },
+    ]
+
+    # ── 5. Final verdict ────────────────────────────────────────────
     if weighted_score > 0.15:
         verdict = "BUY"
     elif weighted_score < -0.15:
@@ -281,9 +357,13 @@ async def run(
     else:
         verdict = "HOLD"
 
-    overall_confidence = round(min(abs(weighted_score) / 0.5, 1.0), 2)
+    base_confidence = min(abs(weighted_score) / 0.5, 1.0)
+    overall_confidence = round(
+        min(base_confidence * macro_result.confidence_multiplier, 1.0),
+        2,
+    )
 
-    # ── 5. Conflict detection ───────────────────────────────────────
+    # ── 6. Conflict detection ───────────────────────────────────────
     conflict_notes = _detect_conflicts(
         technical.signal,
         fundamental.signal,
@@ -291,13 +371,25 @@ async def run(
         ml_prediction.signal,
     )
 
-    # ── 6. Price target estimate ────────────────────────────────────
+    macro_warning = None
+    if macro_result.macro_signal == "BEARISH" and verdict == "BUY":
+        macro_warning = (
+            "Macro conflict: BUY verdict while FII 5-day net flow is strongly "
+            "negative (BEARISH macro signal)."
+        )
+        if conflict_notes:
+            conflict_notes = f"{conflict_notes}; {macro_warning}"
+        else:
+            conflict_notes = macro_warning
+
+    # ── 7. Price target estimate ────────────────────────────────────
     price_target_pct = _estimate_price_target(verdict, overall_confidence)
 
-    # ── 7. Generate detailed report ─────────────────────────────────
+    # ── 8. Generate detailed report ─────────────────────────────────
     detailed_report = await _generate_report(
         symbol, verdict, overall_confidence,
         technical, fundamental, sentiment, risk, ml_prediction,
+        macro_result,
         conflict_notes,
     )
 
@@ -305,22 +397,31 @@ async def run(
     summary = (
         f"{verdict} {symbol} with {overall_confidence:.0%} confidence. "
         f"Technical: {technical.signal}, Fundamental: {fundamental.signal}, "
-        f"Sentiment: {sentiment.signal}, ML: {ml_prediction.signal}, Risk: {risk.risk_level}."
+        f"Sentiment: {sentiment.signal}, ML: {ml_prediction.signal}, "
+        f"Risk: {risk.risk_level}, Macro: {macro_result.macro_signal}."
     )
 
     logger.info(
-        "%s synthesis: verdict=%s confidence=%.2f weighted_score=%.4f",
-        symbol, verdict, overall_confidence, weighted_score,
+        "%s synthesis: verdict=%s confidence=%.2f weighted_score=%.4f macro=%s multiplier=%.2f",
+        symbol,
+        verdict,
+        overall_confidence,
+        weighted_score,
+        macro_result.macro_signal,
+        macro_result.confidence_multiplier,
     )
 
     return SynthesisResult(
         symbol=symbol,
         final_verdict=verdict,
         overall_confidence=overall_confidence,
+        weighted_score=round(weighted_score, 4),
         price_target_pct=price_target_pct,
         summary=summary,
         detailed_report=detailed_report,
         agent_weights=weights,
+        logic_map=logic_map,
         conflict_notes=conflict_notes,
+        macro_warning=macro_warning,
         generated_at=datetime.now(timezone.utc),
     )

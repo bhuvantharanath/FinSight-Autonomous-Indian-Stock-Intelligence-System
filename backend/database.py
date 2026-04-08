@@ -218,15 +218,37 @@ def get_run(run_id: str) -> Optional[dict[str, Any]]:
             select(AgentOutputRow).where(AgentOutputRow.run_id == run_id)
         ).all()
         agents: dict[str, AgentStatus] = {}
+        synthesis_macro_warnings: dict[str, Optional[str]] = {}
+        synthesis_logic_maps: dict[str, list[dict[str, Any]]] = {}
+        synthesis_weighted_scores: dict[str, float] = {}
         for a in agent_rows:
             key = f"{a.agent_name}_{a.symbol}"
+            parsed_data = json.loads(a.data_json) if a.data_json else None
+
+            if a.agent_name == "synthesis" and isinstance(parsed_data, dict):
+                macro_warning = parsed_data.get("macro_warning")
+                if isinstance(macro_warning, str) and macro_warning.strip():
+                    synthesis_macro_warnings[a.symbol] = macro_warning.strip()
+                elif macro_warning is None:
+                    synthesis_macro_warnings[a.symbol] = None
+
+                weighted_score = parsed_data.get("weighted_score")
+                if isinstance(weighted_score, (int, float)):
+                    synthesis_weighted_scores[a.symbol] = float(weighted_score)
+
+                logic_map = parsed_data.get("logic_map")
+                if isinstance(logic_map, list):
+                    synthesis_logic_maps[a.symbol] = [
+                        row for row in logic_map if isinstance(row, dict)
+                    ]
+
             agents[key] = AgentStatus(
                 agent_name=a.agent_name,
                 status=a.status,
                 signal=a.signal,
                 confidence=a.confidence,
                 reasoning=a.reasoning,
-                data=json.loads(a.data_json) if a.data_json else None,
+                data=parsed_data,
                 completed_at=a.completed_at,
             )
 
@@ -240,11 +262,14 @@ def get_run(run_id: str) -> Optional[dict[str, Any]]:
                 symbol=s.symbol,
                 final_verdict=s.verdict,
                 overall_confidence=s.confidence,
+                weighted_score=synthesis_weighted_scores.get(s.symbol, 0.0),
                 price_target_pct=s.price_target_pct,
                 summary=s.summary,
                 detailed_report=s.detailed_report,
                 agent_weights=json.loads(s.agent_weights_json),
+                logic_map=synthesis_logic_maps.get(s.symbol, []),
                 conflict_notes=s.conflict_notes,
+                macro_warning=synthesis_macro_warnings.get(s.symbol),
                 generated_at=s.generated_at,
             )
 

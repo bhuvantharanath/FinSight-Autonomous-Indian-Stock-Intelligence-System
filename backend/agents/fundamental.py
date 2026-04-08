@@ -83,23 +83,47 @@ async def run(symbol: str, ohlcv: OHLCVData) -> FundamentalData:
     score = 0
 
     # PE vs sector average
+    pe_contrib = 0
     if pe is not None:
         if pe < sector_pe * 0.8:
-            score += 2
+            pe_contrib = 2
+            pe_trigger = (
+                f"PE={pe:.1f} vs sector avg={sector_pe:.1f} "
+                f"(undervalued, +2)"
+            )
         elif pe > sector_pe * 1.3:
-            score -= 2
-        # else 0
+            pe_contrib = -2
+            pe_trigger = (
+                f"PE={pe:.1f} vs sector avg={sector_pe:.1f} "
+                f"(overvalued, -2)"
+            )
+        else:
+            pe_trigger = (
+                f"PE={pe:.1f} vs sector avg={sector_pe:.1f} "
+                f"(fairly valued, +0)"
+            )
+    else:
+        pe_trigger = f"PE unavailable vs sector avg={sector_pe:.1f} (+0)"
+    score += pe_contrib
 
     # Debt-to-equity
+    de_contrib = 0
     if de is not None:
         if de < 0.5:
-            score += 2
+            de_contrib = 2
+            de_trigger = f"D/E={de:.2f} (low leverage, +2)"
         elif de <= 1.5:
-            score += 1
+            de_contrib = 1
+            de_trigger = f"D/E={de:.2f} (manageable leverage, +1)"
         elif de <= 3.0:
-            score -= 1
+            de_contrib = -1
+            de_trigger = f"D/E={de:.2f} (elevated leverage, -1)"
         else:
-            score -= 2
+            de_contrib = -2
+            de_trigger = f"D/E={de:.2f} (high leverage risk, -2)"
+    else:
+        de_trigger = "D/E unavailable (+0)"
+    score += de_contrib
 
     # Revenue growth
     if rev_growth is not None:
@@ -128,6 +152,7 @@ async def run(symbol: str, ohlcv: OHLCVData) -> FundamentalData:
         signal = "HOLD"
 
     confidence = round(min(abs(score) / 8.0, 1.0), 2)
+    key_triggers = [pe_trigger, de_trigger]
 
     # ── Reasoning ───────────────────────────────────────────────────
     pe_str = f"PE {pe:.1f} vs sector avg {sector_pe:.1f}" if pe else "PE unavailable"
@@ -159,4 +184,5 @@ async def run(symbol: str, ohlcv: OHLCVData) -> FundamentalData:
         signal=signal,
         confidence=confidence,
         reasoning=reasoning,
+        key_triggers=key_triggers,
     )
