@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+.env
+finsight.db
+*.db
+.DS_Store
+backend_log.txt
+backend_pid.txt
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
